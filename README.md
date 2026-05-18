@@ -18,6 +18,7 @@ npm run build
 npm test
 npm run test:e2e
 npm run test:cov
+npm run test:unit:cov
 npm run lint
 ```
 
@@ -27,4 +28,3 @@ npm run lint
 - `test/` - end-to-end tests and mock HCM helpers
 - `docs/TRD.md` - technical requirements document
 - `.github/workflows/ci.yml` - GitHub Actions CI
-

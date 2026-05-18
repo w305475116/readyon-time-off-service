@@ -128,6 +128,7 @@ Represents the ReadyOn lifecycle of a time-off request and the latest HCM filing
 | `requestedDays`          | Number of time-off days requested.                              |
 | `status`                 | Current lifecycle status.                                       |
 | `rejectionReason`        | Optional reason when `status = REJECTED`.                       |
+| `managerRejectionNote`   | Optional manager-entered note for manager rejections.           |
 | `createIdempotencyKey`   | Prevents duplicate request creation on retry.                   |
 | `hcmReferenceId`         | Optional HCM confirmation/reference ID after successful filing. |
 | `lastHcmErrorCode`       | Optional sanitized HCM error code.                              |
@@ -195,7 +196,7 @@ The service exposes REST endpoints. Write endpoints use explicit request bodies 
 | `GET`  | `/time-off-requests/{requestId}`                            | Return the current request state.                                                   |
 | `POST` | `/time-off-requests/{requestId}/approve`                    | Manager approval. Transitions the request through HCM filing.                       |
 | `POST` | `/time-off-requests/{requestId}/reject`                     | Manager rejection. Does not call HCM.                                               |
-| `POST` | `/time-off-requests/{requestId}/reconcile`                  | Re-check HCM for a request in `NEEDS_RECONCILIATION`.                               |
+| `POST` | `/time-off-requests/{requestId}/reconcile`                  | Re-check HCM for a request in `NEEDS_RECONCILIATION` or stalled `APPROVING_WITH_HCM`. |
 | `POST` | `/hcm-sync/balances`                                        | Internal endpoint to ingest a batch HCM balance snapshot into the local projection. |
 
 Balance reads return ReadyOn's latest synced projection. Balance-consuming operations, such as request creation and approval, perform their own HCM validation regardless of the projection's `lastSyncedAt`.
@@ -279,7 +280,7 @@ Request:
 }
 ```
 
-Response status is `REJECTED` with `rejectionReason = MANAGER_REJECTED`.
+Response status is `REJECTED` with `rejectionReason = MANAGER_REJECTED` and the optional note echoed as `managerRejectionNote`.
 
 ### Batch Balance Sync
 
@@ -358,6 +359,7 @@ HCM is the final authority for balance-consuming operations. ReadyOn's local bal
 - ReadyOn prevents duplicate local approvals with conditional state transitions.
 - HCM must be the final atomic gate for global balance deduction because other systems can update HCM outside ReadyOn.
 - Unknown HCM outcomes move requests to `NEEDS_RECONCILIATION` instead of assuming success or failure.
+- SQLite transaction sections are serialized inside the service process to avoid overlapping savepoint behavior on the single local SQLite connection used by the exercise runtime.
 
 ## 11. Failure Modes
 
@@ -370,6 +372,7 @@ HCM is the final authority for balance-consuming operations. ReadyOn's local bal
 | HCM rejects approval for invalid dimensions                 | Mark `REJECTED` with `HCM_INVALID_DIMENSIONS`.                                                      |
 | HCM rejects approval for insufficient balance               | Mark `REJECTED` with `HCM_INSUFFICIENT_BALANCE`.                                                    |
 | HCM times out or returns ambiguous response during approval | Mark `NEEDS_RECONCILIATION`; alert and retry reconciliation.                                        |
+| Service crashes after local approval starts but before a final HCM outcome is recorded | Leave the durable `APPROVING_WITH_HCM` state recoverable through reconciliation. |
 | Same request is approved twice                              | Conditional transition allows only one `PENDING_MANAGER_APPROVAL -> APPROVING_WITH_HCM` transition. |
 | Client retries request creation                             | Same `Idempotency-Key` returns the original request instead of creating a duplicate.                |
 | Local balance projection is stale                           | Balance-consuming operations still validate with HCM realtime.                                      |
@@ -377,7 +380,7 @@ HCM is the final authority for balance-consuming operations. ReadyOn's local bal
 
 ## 12. Test Strategy
 
-The test suite is the main proof of correctness. It uses unit tests for domain transitions, integration tests against SQLite, and e2e tests against a mock HCM service.
+The test suite is the main proof of correctness. It uses an end-to-end suite against SQLite and a mock HCM service for the critical workflows, plus a small unit smoke test for the health controller.
 
 Test coverage should include:
 
@@ -385,6 +388,7 @@ Test coverage should include:
 - Request creation fails when HCM reports invalid dimensions or insufficient balance.
 - Request creation fails closed when HCM is unavailable.
 - Manager rejection transitions a pending request to `REJECTED` without calling HCM.
+- Manager rejection preserves the optional manager-entered note.
 - Manager approval transitions through `APPROVING_WITH_HCM` and becomes `APPROVED` only after HCM confirms.
 - HCM rejection during approval maps to `REJECTED` with the correct rejection reason.
 - HCM timeout during approval maps to `NEEDS_RECONCILIATION`.
@@ -393,6 +397,8 @@ Test coverage should include:
 - Retried create requests with the same idempotency key do not create duplicates.
 - Retried approvals do not double-file to HCM.
 - Concurrent approval attempts for the same request result in only one HCM filing attempt.
+- Concurrent approval attempts for separate requests on the same employee/location cannot overdraw the HCM balance.
+- Stalled `APPROVING_WITH_HCM` requests can be reconciled when no HCM filing exists.
 - Batch sync updates changed balances and leaves unchanged rows untouched.
 - Balance-consuming operations ignore stale local projections and use HCM realtime validation.
 

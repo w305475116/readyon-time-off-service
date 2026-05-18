@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+test/coverage-e2e/
 .env
 .env.*
 !.env.example
@@ -9,4 +10,3 @@ coverage/
 *.sqlite
 *.sqlite3
 tmp/
-

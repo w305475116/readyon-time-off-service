@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HealthModule } from './health/health.module';
+import { TimeOffModule } from './time-off/time-off.module';
 
 @Module({
   imports: [
@@ -18,8 +19,8 @@ import { HealthModule } from './health/health.module';
         synchronize: true
       })
     }),
-    HealthModule
+    HealthModule,
+    TimeOffModule
   ]
 })
 export class AppModule {}
-
